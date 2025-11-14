@@ -130,21 +130,21 @@ export class ReschedulingService implements OnModuleInit {
 
       // Process batch in parallel using Promise.all
       const batchPromises = batch.map(async (job) => {
-        try {
-          const metrics = await this.calculateMetrics(job);
-          const newExpression = await this.evaluateRules(job, metrics);
+      try {
+        const metrics = await this.calculateMetrics(job);
+        const newExpression = await this.evaluateRules(job, metrics);
 
-          if (newExpression && newExpression !== job.cronExpression) {
-            await this.applyRescheduling(job, newExpression, 'auto-rescheduling');
-            this.logger.log(
-              `Auto-rescheduled job ${job.name} (${job.id}): ${job.cronExpression} -> ${newExpression}`,
-            );
-          }
-          return { success: true, jobId: job.id };
-        } catch (error) {
-          this.logger.error(`Failed to evaluate job ${job.id}:`, error);
-          return { success: false, jobId: job.id, error };
+        if (newExpression && newExpression !== job.cronExpression) {
+          await this.applyRescheduling(job, newExpression, 'auto-rescheduling');
+          this.logger.log(
+            `Auto-rescheduled job ${job.name} (${job.id}): ${job.cronExpression} -> ${newExpression}`,
+          );
         }
+          return { success: true, jobId: job.id };
+      } catch (error) {
+        this.logger.error(`Failed to evaluate job ${job.id}:`, error);
+          return { success: false, jobId: job.id, error };
+      }
       });
 
       // Wait for batch to complete

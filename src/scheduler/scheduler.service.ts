@@ -230,22 +230,22 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
           // Use transaction to update execution and job status atomically
           await this.prisma.$transaction([
             this.prisma.cronExecution.update({
-              where: { id: execution.id },
-              data: {
-                completedAt: new Date(),
-                status: ExecutionStatus.SUCCESS,
-                responseStatus: result.status,
-                responseBody: responseBodyToSave,
-                executionTimeMs: executionTime,
-                attemptNumber: attempt,
-              },
+            where: { id: execution.id },
+            data: {
+              completedAt: new Date(),
+              status: ExecutionStatus.SUCCESS,
+              responseStatus: result.status,
+              responseBody: responseBodyToSave,
+              executionTimeMs: executionTime,
+              attemptNumber: attempt,
+            },
             }),
             this.prisma.cronJob.update({
-              where: { id: prismaJob.id },
-              data: {
-                status: CronJobStatus.SUCCESS,
+            where: { id: prismaJob.id },
+            data: {
+              status: CronJobStatus.SUCCESS,
                 ...(nextRunAt && { nextRunAt }),
-              },
+            },
             }),
           ]);
 
@@ -298,21 +298,21 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       // Use transaction to update execution and job status atomically
       await this.prisma.$transaction([
         this.prisma.cronExecution.update({
-          where: { id: execution.id },
-          data: {
-            completedAt: new Date(),
-            status: ExecutionStatus.FAILED,
-            errorMessage,
-            executionTimeMs: executionTime,
-            attemptNumber: attempt - 1,
-          },
+        where: { id: execution.id },
+        data: {
+          completedAt: new Date(),
+          status: ExecutionStatus.FAILED,
+          errorMessage,
+          executionTimeMs: executionTime,
+          attemptNumber: attempt - 1,
+        },
         }),
         this.prisma.cronJob.update({
-          where: { id: prismaJob.id },
-          data: {
-            status: CronJobStatus.FAILED,
+        where: { id: prismaJob.id },
+        data: {
+          status: CronJobStatus.FAILED,
             ...(nextRunAt && { nextRunAt }),
-          },
+        },
         }),
       ]);
 

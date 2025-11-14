@@ -9,6 +9,14 @@ import { CurrentUser } from '../common/decorators/user.decorator';
 export class ViewsController {
   constructor() {}
 
+  @Get('health')
+  health() {
+    return {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+    };
+  }
+
   @Get('login')
   @Render('login')
   async login() {
