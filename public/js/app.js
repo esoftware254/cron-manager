@@ -1,29 +1,38 @@
 /* global io */
 
-// Initialize Socket.io connection
+// Initialize Socket.io connection (shared across all pages)
 // Use current host and protocol (works for localhost and production)
 const socketProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
 const socketHost = window.location.host;
-const socket = io(`${socketProtocol}//${socketHost}/ws`, {
+window.socket = io(`${socketProtocol}//${socketHost}/ws`, {
   transports: ['polling', 'websocket'],
   upgrade: true,
   rememberUpgrade: true,
 });
 
-socket.on('connect', () => {
+window.socket.on('connect', () => {
     console.log('Connected to WebSocket server');
 });
 
-socket.on('execution:started', (data) => {
-    console.log('Execution started:', data);
-    updateStats();
-});
+// Dashboard-specific event handlers (only on dashboard/index page)
+if (window.location.pathname === '/' || window.location.pathname === '/dashboard') {
+    window.socket.on('execution:started', (data) => {
+        console.log('Execution started:', data);
+        if (typeof updateStats === 'function') {
+            updateStats();
+        }
+    });
 
-socket.on('execution:completed', (data) => {
-    console.log('Execution completed:', data);
-    updateStats();
-    updateRecentExecutions();
-});
+    window.socket.on('execution:completed', (data) => {
+        console.log('Execution completed:', data);
+        if (typeof updateStats === 'function') {
+            updateStats();
+        }
+        if (typeof updateRecentExecutions === 'function') {
+            updateRecentExecutions();
+        }
+    });
+}
 
 // Load stats on page load with a small delay to ensure cookies are available
 document.addEventListener('DOMContentLoaded', () => {

@@ -1,7 +1,60 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 // Logs page JavaScript
 document.addEventListener('DOMContentLoaded', () => {
     loadLogs();
+    
+    // Initialize Socket.IO listeners for real-time log updates
+    initSocketListeners();
 });
+
+// Socket.IO event listeners for real-time log updates
+function initSocketListeners() {
+    // Wait for socket to be initialized (from app.js)
+    const initSocket = () => {
+        if (!window.socket) {
+            // Wait a bit if socket isn't ready yet
+            setTimeout(initSocket, 100);
+            return;
+        }
+
+        // Listen for execution started events
+        window.socket.on('execution:started', (data) => {
+            console.log('Execution started:', data);
+            // Add a loading indicator or append to the top of the table
+            // For now, we'll reload after a short delay to show the new execution
+            setTimeout(() => {
+                if (typeof loadLogs === 'function') {
+                    loadLogs();
+                }
+            }, 1000);
+        });
+
+        // Listen for execution completed events
+        window.socket.on('execution:completed', (data) => {
+            console.log('Execution completed:', data);
+            // Reload logs to show the new execution
+            // Small delay to ensure database is updated
+            setTimeout(() => {
+                if (typeof loadLogs === 'function') {
+                    loadLogs();
+                }
+            }, 500);
+        });
+
+        // Listen for execution failed events
+        window.socket.on('execution:failed', (data) => {
+            console.log('Execution failed:', data);
+            // Reload logs to show the failed execution
+            setTimeout(() => {
+                if (typeof loadLogs === 'function') {
+                    loadLogs();
+                }
+            }, 500);
+        });
+    };
+
+    initSocket();
+}
 
 async function loadLogs() {
     try {

@@ -1,6 +1,84 @@
 // Jobs page JavaScript
 console.log('jobs.js loaded');
 
+// Socket.IO event listeners for real-time job updates
+document.addEventListener('DOMContentLoaded', () => {
+    // Wait for socket to be initialized (from app.js)
+    const initSocketListeners = () => {
+        if (!window.socket) {
+            // Wait a bit if socket isn't ready yet
+            setTimeout(initSocketListeners, 100);
+            return;
+        }
+
+        // Listen for job created events
+        window.socket.on('cron:created', (data) => {
+            console.log('Job created:', data);
+            // Reload jobs list
+            if (typeof window.loadJobs === 'function') {
+                window.loadJobs();
+            }
+        });
+
+        // Listen for job updated events
+        window.socket.on('cron:updated', (data) => {
+            console.log('Job updated:', data);
+            // Reload jobs list to show updated status/next run time
+            if (typeof window.loadJobs === 'function') {
+                window.loadJobs();
+            }
+        });
+
+        // Listen for job deleted events
+        window.socket.on('cron:deleted', (data) => {
+            console.log('Job deleted:', data);
+            // Reload jobs list
+            if (typeof window.loadJobs === 'function') {
+                window.loadJobs();
+            }
+        });
+
+        // Listen for execution events to update job status
+        window.socket.on('execution:started', (data) => {
+            console.log('Execution started:', data);
+            // Update job status in the table if job is displayed
+            updateJobStatus(data.jobId, 'RUNNING');
+        });
+
+        window.socket.on('execution:completed', (data) => {
+            console.log('Execution completed:', data);
+            // Update job status in the table
+            updateJobStatus(data.jobId, data.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED');
+            // Reload jobs to update last run time and next run time
+            if (typeof window.loadJobs === 'function') {
+                // Small delay to ensure database is updated
+                setTimeout(() => window.loadJobs(), 500);
+            }
+        });
+    };
+
+    initSocketListeners();
+});
+
+// Helper function to update job status in the table without full reload
+function updateJobStatus(jobId, status) {
+    // Find the job row and update status badge
+    const jobRows = document.querySelectorAll('[data-job-id="' + jobId + '"]');
+    jobRows.forEach(row => {
+        const statusCell = row.querySelector('.job-status');
+        if (statusCell) {
+            const statusClasses = {
+                'RUNNING': 'bg-yellow-100 text-yellow-800',
+                'SUCCESS': 'bg-green-100 text-green-800',
+                'FAILED': 'bg-red-100 text-red-800',
+                'PENDING': 'bg-gray-100 text-gray-800'
+            };
+            statusCell.className = 'job-status px-2 py-1 rounded-full text-xs font-semibold ' + (statusClasses[status] || statusClasses['PENDING']);
+            statusCell.textContent = status;
+        }
+    });
+}
+
 // Make functions globally available immediately
 window.showCreateJobModal = function() {
     console.log('showCreateJobModal called');
@@ -212,7 +290,7 @@ function renderJobs(jobs) {
             const lastRun = job.lastRunAt ? new Date(job.lastRunAt).toLocaleString() : '<span class="text-gray-400">Never</span>';
             const nextRun = job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : '<span class="text-gray-400">-</span>';
 
-            return '<tr class="hover:bg-gray-50 transition-colors">' +
+            return '<tr class="hover:bg-gray-50 transition-colors" data-job-id="' + job.id + '">' +
                 '<td class="px-3 py-3" style="max-width: 250px;">' +
                     '<div class="flex items-center min-w-0">' +
                         '<div class="flex-shrink-0 h-8 w-8 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 flex items-center justify-center text-white font-semibold text-xs mr-2">' +
@@ -236,7 +314,7 @@ function renderJobs(jobs) {
                         '<span class="px-2 py-1 inline-flex text-xs leading-4 font-semibold rounded-full ' + activeClass + ' w-fit">' +
                             (job.isActive ? 'Active' : 'Inactive') +
                         '</span>' +
-                        '<span class="px-2 py-1 inline-flex text-xs leading-4 font-semibold rounded-full ' + statusClass + ' w-fit">' +
+                        '<span class="job-status px-2 py-1 inline-flex text-xs leading-4 font-semibold rounded-full ' + statusClass + ' w-fit">' +
                             (job.status || 'PENDING') +
                         '</span>' +
                     '</div>' +
@@ -294,7 +372,7 @@ function renderJobs(jobs) {
             const lastRun = job.lastRunAt ? new Date(job.lastRunAt).toLocaleString() : 'Never';
             const nextRun = job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : '-';
 
-            return '<div class="bg-white rounded-xl shadow-md p-4 sm:p-6 border border-gray-200">' +
+            return '<div class="bg-white rounded-xl shadow-md p-4 sm:p-6 border border-gray-200" data-job-id="' + job.id + '">' +
                 '<div class="flex items-start justify-between mb-4">' +
                     '<div class="flex items-center space-x-3 flex-1 min-w-0">' +
                         '<div class="flex-shrink-0 h-10 w-10 rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 flex items-center justify-center text-white font-semibold">' +
@@ -309,7 +387,7 @@ function renderJobs(jobs) {
                         '<span class="px-2 py-1 text-xs font-semibold rounded-full ' + activeClass + '">' +
                             (job.isActive ? 'Active' : 'Inactive') +
                         '</span>' +
-                        '<span class="px-2 py-1 text-xs font-semibold rounded-full ' + statusClass + '">' +
+                        '<span class="job-status px-2 py-1 text-xs font-semibold rounded-full ' + statusClass + '">' +
                             (job.status || 'PENDING') +
                         '</span>' +
                     '</div>' +

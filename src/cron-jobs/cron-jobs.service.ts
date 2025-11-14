@@ -13,6 +13,7 @@ import { UpdateCronJobDto } from './dto/update-cron-job.dto';
 import { SchedulerService } from '../scheduler/scheduler.service';
 import { AuditService } from '../audit/audit.service';
 import { ExecutionService } from '../scheduler/execution.service';
+import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { CronJobStatus } from '@prisma/client';
 import * as cronParser from 'node-cron';
 import { CronExpressionParser } from 'cron-parser';
@@ -26,6 +27,7 @@ export class CronJobsService {
     private schedulerService: SchedulerService,
     private auditService: AuditService,
     private executionService: ExecutionService,
+    private websocketGateway: WebsocketGateway,
   ) {}
 
   async create(dto: CreateCronJobDto, userId: string, ipAddress?: string, userAgent?: string) {
@@ -86,6 +88,9 @@ export class CronJobsService {
     if (cronJob.isActive) {
       await this.schedulerService.registerJob(cronJob);
     }
+
+    // Emit WebSocket event
+    this.websocketGateway.emitCronCreated(cronJob.id, cronJob.name);
 
     await this.auditService.log({
       action: 'CRON_JOB_CREATED',
@@ -264,6 +269,18 @@ export class CronJobsService {
       await this.schedulerService.registerJob(updatedJob);
     }
 
+    // Emit WebSocket event
+    this.websocketGateway.emitCronUpdated(updatedJob.id, updatedJob.name);
+
+    // Emit schedule change event if cron expression changed
+    if (cronExpressionChanged) {
+      this.websocketGateway.emitScheduleChanged(
+        id,
+        existingJob.cronExpression,
+        dto.cronExpression,
+      );
+    }
+
     await this.auditService.log({
       action: 'CRON_JOB_UPDATED',
       resourceType: 'CRON_JOB',
@@ -293,6 +310,9 @@ export class CronJobsService {
     await this.prisma.cronJob.delete({
       where: { id },
     });
+
+    // Emit WebSocket event
+    this.websocketGateway.emitCronDeleted(id);
 
     await this.auditService.log({
       action: 'CRON_JOB_DELETED',
@@ -329,6 +349,9 @@ export class CronJobsService {
     } else {
       await this.schedulerService.unregisterJob(id);
     }
+
+    // Emit WebSocket event
+    this.websocketGateway.emitCronUpdated(updatedJob.id, updatedJob.name);
 
     await this.auditService.log({
       action: 'CRON_JOB_TOGGLED',
