@@ -1,0 +1,162 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+  READ_ONLY
+}
+
+enum Permission {
+  READ
+  WRITE
+  DELETE
+  EXECUTE
+  ADMIN
+}
+
+enum CronJobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum ExecutionStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  passwordHash  String    @map("password_hash")
+  role          UserRole  @default(USER)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  apiTokens     ApiToken[]
+  cronJobs      CronJob[] @relation("CreatedBy")
+  updatedCronJobs CronJob[] @relation("UpdatedBy")
+  scheduleChanges ScheduleChange[]
+  auditLogs     AuditLog[]
+
+  @@map("users")
+}
+
+model ApiToken {
+  id          String      @id @default(uuid())
+  token       String      @unique
+  userId      String      @map("user_id")
+  name        String
+  permissions Permission[]
+  isActive    Boolean     @default(true) @map("is_active")
+  expiresAt   DateTime?   @map("expires_at")
+  lastUsedAt  DateTime?   @map("last_used_at")
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auditLogs   AuditLog[]
+
+  @@map("api_tokens")
+}
+
+model CronJob {
+  id            String          @id @default(uuid())
+  name          String
+  description   String?
+  cronExpression String         @map("cron_expression")
+  timezone      String          @default("UTC")
+  endpointUrl   String          @map("endpoint_url")
+  httpMethod    String          @default("GET") @map("http_method")
+  headers       Json?           @default("{}")
+  body          String?
+  queryParams  Json?           @default("{}") @map("query_params")
+  isActive      Boolean         @default(true) @map("is_active")
+  retryCount    Int             @default(3) @map("retry_count")
+  timeoutMs     Int             @default(30000) @map("timeout_ms")
+  createdBy     String          @map("created_by")
+  updatedBy     String?         @map("updated_by")
+  createdAt     DateTime        @default(now()) @map("created_at")
+  updatedAt     DateTime        @updatedAt @map("updated_at")
+  lastRunAt     DateTime?       @map("last_run_at")
+  nextRunAt     DateTime?       @map("next_run_at")
+  status        CronJobStatus   @default(PENDING)
+
+  createdByUser User            @relation("CreatedBy", fields: [createdBy], references: [id])
+  updatedByUser User?           @relation("UpdatedBy", fields: [updatedBy], references: [id])
+  executions    CronExecution[]
+  scheduleChanges ScheduleChange[]
+
+  @@map("cron_jobs")
+}
+
+model CronExecution {
+  id            String          @id @default(uuid())
+  cronJobId     String          @map("cron_job_id")
+  startedAt     DateTime        @map("started_at")
+  completedAt   DateTime?       @map("completed_at")
+  status        ExecutionStatus
+  responseStatus Int?           @map("response_status")
+  responseBody  String?         @map("response_body")
+  errorMessage  String?         @map("error_message")
+  executionTimeMs Int?          @map("execution_time_ms")
+  attemptNumber Int             @default(1) @map("attempt_number")
+
+  cronJob       CronJob         @relation(fields: [cronJobId], references: [id], onDelete: Cascade)
+
+  @@index([cronJobId])
+  @@index([startedAt])
+  @@map("cron_executions")
+}
+
+model AuditLog {
+  id            String      @id @default(uuid())
+  userId        String?     @map("user_id")
+  tokenId       String?     @map("token_id")
+  action        String
+  resourceType  String?     @map("resource_type")
+  resourceId    String?     @map("resource_id")
+  ipAddress     String?     @map("ip_address")
+  userAgent     String?     @map("user_agent")
+  requestPayload Json?      @map("request_payload")
+  responseStatus Int?       @map("response_status")
+  timestamp     DateTime    @default(now())
+
+  user          User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  token         ApiToken?   @relation(fields: [tokenId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([tokenId])
+  @@index([timestamp])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+model ScheduleChange {
+  id                String      @id @default(uuid())
+  cronJobId         String      @map("cron_job_id")
+  oldCronExpression String      @map("old_cron_expression")
+  newCronExpression String      @map("new_cron_expression")
+  reason            String?
+  changedBy         String      @map("changed_by")
+  changedAt         DateTime    @default(now()) @map("changed_at")
+
+  cronJob           CronJob     @relation(fields: [cronJobId], references: [id], onDelete: Cascade)
+  user              User        @relation(fields: [changedBy], references: [id])
+
+  @@index([cronJobId])
+  @@index([changedAt])
+  @@map("schedule_changes")
+}
+
