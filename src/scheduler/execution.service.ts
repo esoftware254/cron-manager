@@ -1,12 +1,45 @@
-import { Injectable, Logger } from '@nestjs/common';
-import axios, { AxiosRequestConfig, AxiosResponse } from 'axios';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import axios, { AxiosRequestConfig, AxiosResponse, AxiosInstance } from 'axios';
 import { ConfigService } from '@nestjs/config';
+import * as http from 'http';
+import * as https from 'https';
 
 @Injectable()
-export class ExecutionService {
+export class ExecutionService implements OnModuleInit {
   private readonly logger = new Logger(ExecutionService.name);
+  private readonly axiosInstance: AxiosInstance;
 
-  constructor(private configService: ConfigService) {}
+  constructor(private configService: ConfigService) {
+    // Create HTTP and HTTPS agents with connection pooling
+    const httpAgent = new http.Agent({
+      keepAlive: true,
+      maxSockets: 50,
+      maxFreeSockets: 10,
+      timeout: 60000,
+      keepAliveMsecs: 30000,
+    });
+
+    const httpsAgent = new https.Agent({
+      keepAlive: true,
+      maxSockets: 50,
+      maxFreeSockets: 10,
+      timeout: 60000,
+      keepAliveMsecs: 30000,
+    });
+
+    // Create shared axios instance with connection pooling
+    this.axiosInstance = axios.create({
+      httpAgent,
+      httpsAgent,
+      timeout: 30000, // Default timeout (can be overridden per request)
+    });
+
+    this.logger.log('HTTP connection pooling configured (maxSockets: 50, maxFreeSockets: 10)');
+  }
+
+  onModuleInit() {
+    this.logger.log('ExecutionService initialized with HTTP connection pooling');
+  }
 
   async executeHttpRequest(
     url: string,
@@ -15,8 +48,9 @@ export class ExecutionService {
     body?: string,
     queryParams: Record<string, string> = {},
     timeoutMs: number = 30000,
-  ): Promise<{ status: number; data: any }> {
+  ): Promise<{ status: number; data: unknown }> {
     const config: AxiosRequestConfig = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       method: method.toUpperCase() as any,
       url,
       headers: {
@@ -44,30 +78,34 @@ export class ExecutionService {
     this.logger.debug(`Executing ${method} request to ${url}`);
 
     try {
-      const response: AxiosResponse = await axios(config);
+      // Use pooled axios instance instead of direct axios call
+      const response: AxiosResponse = await this.axiosInstance(config);
 
       return {
         status: response.status,
         data: response.data,
       };
-    } catch (error: any) {
-      if (error.code === 'ECONNABORTED') {
-        throw new Error(`Request timeout after ${timeoutMs}ms`);
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error)) {
+        if (error.code === 'ECONNABORTED') {
+          throw new Error(`Request timeout after ${timeoutMs}ms`);
+        }
+
+        if (error.response) {
+          // Server responded with error status
+          return {
+            status: error.response.status,
+            data: error.response.data,
+          };
+        }
+
+        if (error.request) {
+          throw new Error(`No response received: ${error.message || 'Unknown error'}`);
+        }
       }
 
-      if (error.response) {
-        // Server responded with error status
-        return {
-          status: error.response.status,
-          data: error.response.data,
-        };
-      }
-
-      if (error.request) {
-        throw new Error(`No response received: ${error.message}`);
-      }
-
-      throw new Error(`Request failed: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new Error(`Request failed: ${errorMessage}`);
     }
   }
 }

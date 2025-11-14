@@ -36,6 +36,11 @@ Create a `.env` file in the root directory:
 # Database
 DATABASE_URL="postgresql://user:password@localhost:5432/cron_manager?schema=public"
 
+# Database Connection Pool Configuration
+# Connection pool size (should be >= MAX_CONCURRENT_EXECUTIONS)
+DATABASE_CONNECTION_LIMIT=20
+DATABASE_POOL_TIMEOUT=20
+
 # JWT Configuration
 JWT_SECRET=your-secret-key-change-in-production
 JWT_EXPIRES_IN=15m
@@ -59,8 +64,15 @@ LOG_LEVEL=info
 
 # Feature Flags
 AUTO_RESCHEDULING_ENABLED=true
-MAX_CONCURRENT_EXECUTIONS=10
 LOG_RETENTION_DAYS=30
+
+# Concurrency and Performance Configuration
+# Maximum number of concurrent job executions (default: 10)
+# Recommended: Set to 10-50 depending on server resources and job complexity
+MAX_CONCURRENT_EXECUTIONS=10
+# Batch size for rescheduling service processing (default: 50)
+# Recommended: 50-100 for optimal performance with 200+ jobs
+RESCHEDULING_BATCH_SIZE=50
 ```
 
 3. Set up the database:
@@ -190,6 +202,39 @@ The system automatically reschedules jobs based on performance metrics:
 - **Consecutive failures**: Disables job after 3 consecutive failures
 
 Auto-rescheduling runs every hour and can be disabled via `AUTO_RESCHEDULING_ENABLED=false`.
+
+## Performance and Scalability
+
+The cron manager is optimized to handle 200+ cron jobs reliably:
+
+### Concurrency Control
+- **Execution Queue**: Jobs are queued and executed with a configurable concurrency limit (`MAX_CONCURRENT_EXECUTIONS`)
+- **Default**: 10 concurrent executions (configurable via environment variable)
+- **Benefits**: Prevents server overload, manages database connections, and ensures reliable execution
+
+### Database Connection Pooling
+- **Connection Pool**: Configured via `DATABASE_CONNECTION_LIMIT` (default: 20)
+- **Pool Timeout**: Configurable via `DATABASE_POOL_TIMEOUT` (default: 20 seconds)
+- **Recommendation**: Set `DATABASE_CONNECTION_LIMIT` to at least 2x `MAX_CONCURRENT_EXECUTIONS`
+
+### Optimized Database Writes
+- **Transactions**: Execution records and job status updates are combined into atomic transactions
+- **Batching**: Reduces database write overhead and improves performance
+
+### HTTP Connection Pooling
+- **Connection Reuse**: HTTP connections are pooled and reused across requests
+- **Configuration**: maxSockets: 50, maxFreeSockets: 10
+- **Benefits**: Reduces connection overhead and improves HTTP request performance
+
+### Rescheduling Optimization
+- **Batch Processing**: Jobs are processed in configurable batches (default: 50)
+- **Parallel Execution**: Metrics calculation runs in parallel within batches using Promise.all()
+- **Configuration**: Set `RESCHEDULING_BATCH_SIZE` to optimize for your job count
+
+### Performance Recommendations
+- **200-500 jobs**: Default configuration should work well
+- **500+ jobs**: Consider increasing `MAX_CONCURRENT_EXECUTIONS` and `DATABASE_CONNECTION_LIMIT`
+- **1000+ jobs**: May require distributed architecture (Bull Queue) or horizontal scaling
 
 ## Frontend Dashboard
 

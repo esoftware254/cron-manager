@@ -1,5 +1,59 @@
-import { PartialType } from '@nestjs/mapped-types';
-import { CreateCronJobDto } from './create-cron-job.dto';
+import { IsString, IsOptional, IsBoolean, IsInt, IsEnum, IsObject, Min, Max } from 'class-validator';
+import { Type } from 'class-transformer';
 
-export class UpdateCronJobDto extends PartialType(CreateCronJobDto) {}
+export class UpdateCronJobDto {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @IsOptional()
+  @IsString()
+  cronExpression?: string;
+
+  @IsOptional()
+  @IsString()
+  timezone?: string;
+
+  @IsOptional()
+  @IsString()
+  endpointUrl?: string;
+
+  @IsOptional()
+  @IsEnum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
+  httpMethod?: string;
+
+  @IsOptional()
+  @IsObject()
+  headers?: Record<string, string>;
+
+  @IsOptional()
+  @IsString()
+  body?: string;
+
+  @IsOptional()
+  @IsObject()
+  queryParams?: Record<string, string>;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(10)
+  retryCount?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1000)
+  @Max(300000)
+  timeoutMs?: number;
+}
 

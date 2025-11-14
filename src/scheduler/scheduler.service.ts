@@ -1,23 +1,39 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { ExecutionService } from './execution.service';
 import { WebsocketGateway } from '../websocket/websocket.gateway';
 import { CronJob as PrismaCronJob, CronJobStatus, ExecutionStatus } from '@prisma/client';
 import { CronExpressionParser } from 'cron-parser';
 import { CronJob } from 'cron';
+import PQueue from 'p-queue';
 
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
   private readonly registeredJobs = new Map<string, CronJob>();
+  private readonly executionQueue: PQueue;
+  private queueStatsInterval: NodeJS.Timeout | null = null;
 
   constructor(
     private schedulerRegistry: SchedulerRegistry,
     private prisma: PrismaService,
     private executionService: ExecutionService,
     private websocketGateway: WebsocketGateway,
-  ) {}
+    private configService: ConfigService,
+  ) {
+    // Initialize execution queue with concurrency limit
+    const maxConcurrent = parseInt(
+      this.configService.get<string>('MAX_CONCURRENT_EXECUTIONS') || '10',
+      10,
+    );
+    this.executionQueue = new PQueue({
+      concurrency: maxConcurrent,
+    });
+
+    this.logger.log(`Execution queue initialized with concurrency limit: ${maxConcurrent}`);
+  }
 
   async onModuleInit() {
     // Load all active cron jobs from database
@@ -30,9 +46,20 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.logger.log(`Loaded ${activeJobs.length} active cron jobs`);
+
+    // Start queue metrics logging (every 5 minutes)
+    this.startQueueMetricsLogging();
   }
 
   async onModuleDestroy() {
+    // Stop queue metrics logging
+    if (this.queueStatsInterval) {
+      clearInterval(this.queueStatsInterval);
+    }
+
+    // Wait for queue to finish processing
+    await this.executionQueue.onIdle();
+
     // Unregister all jobs on shutdown
     for (const jobId of this.registeredJobs.keys()) {
       this.unregisterJob(jobId);
@@ -55,6 +82,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       cronJob.start();
 
       // Store in registry and map
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.schedulerRegistry.addCronJob(prismaJob.id, cronJob as any);
       this.registeredJobs.set(prismaJob.id, cronJob);
 
@@ -79,7 +107,35 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async executeJob(prismaJob: PrismaCronJob, isManual: boolean = false): Promise<any> {
+  async executeJob(prismaJob: PrismaCronJob, isManual: boolean = false): Promise<{
+    id: string;
+    status: ExecutionStatus;
+    responseStatus?: number;
+    errorMessage?: string;
+    executionTimeMs: number;
+    attemptNumber: number;
+  }> {
+    // Add job to execution queue to enforce concurrency limit
+    const result = await this.executionQueue.add(
+      () => this.executeJobInternal(prismaJob),
+      { priority: isManual ? 1 : 0 }, // Manual executions have higher priority
+    );
+    // Type assertion needed because p-queue's add can return void in some overloads
+    // but our function always returns a value
+    if (!result) {
+      throw new Error('Job execution returned undefined');
+    }
+    return result;
+  }
+
+  private async executeJobInternal(prismaJob: PrismaCronJob): Promise<{
+    id: string;
+    status: ExecutionStatus;
+    responseStatus?: number;
+    errorMessage?: string;
+    executionTimeMs: number;
+    attemptNumber: number;
+  }> {
     const startTime = Date.now();
 
     // Update job status
@@ -107,7 +163,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
       // Execute the job with retry logic
       let attempt = 1;
-      let lastError: any = null;
+      let lastError: Error | null = null;
 
       while (attempt <= prismaJob.retryCount) {
         try {
@@ -161,27 +217,37 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             responseBodyToSave = JSON.stringify(result.data);
           }
 
-          // Update execution record
-          await this.prisma.cronExecution.update({
-            where: { id: execution.id },
-            data: {
-              completedAt: new Date(),
-              status: ExecutionStatus.SUCCESS,
-              responseStatus: result.status,
-              responseBody: responseBodyToSave,
-              executionTimeMs: executionTime,
-              attemptNumber: attempt,
-            },
-          });
+          // Optimize: Update execution record and job status in a transaction
+          // Calculate nextRunAt first
+          let nextRunAt: Date | null = null;
+          try {
+            const expression = CronExpressionParser.parse(prismaJob.cronExpression);
+            nextRunAt = expression.next().toDate();
+          } catch (error) {
+            this.logger.warn(`Failed to calculate next run time for job ${prismaJob.id}:`, error);
+          }
 
-          // Update job status
-          await this.updateJobNextRun(prismaJob);
-          await this.prisma.cronJob.update({
-            where: { id: prismaJob.id },
-            data: {
-              status: CronJobStatus.SUCCESS,
-            },
-          });
+          // Use transaction to update execution and job status atomically
+          await this.prisma.$transaction([
+            this.prisma.cronExecution.update({
+              where: { id: execution.id },
+              data: {
+                completedAt: new Date(),
+                status: ExecutionStatus.SUCCESS,
+                responseStatus: result.status,
+                responseBody: responseBodyToSave,
+                executionTimeMs: executionTime,
+                attemptNumber: attempt,
+              },
+            }),
+            this.prisma.cronJob.update({
+              where: { id: prismaJob.id },
+              data: {
+                status: CronJobStatus.SUCCESS,
+                ...(nextRunAt && { nextRunAt }),
+              },
+            }),
+          ]);
 
           // Emit WebSocket event
           this.websocketGateway.emitExecutionCompleted(
@@ -201,8 +267,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             executionTimeMs: executionTime,
             attemptNumber: attempt,
           };
-        } catch (error: any) {
-          lastError = error;
+        } catch (error: unknown) {
+          lastError = error instanceof Error ? error : new Error(String(error));
           attempt++;
 
           // Wait before retry (exponential backoff)
@@ -220,25 +286,35 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       const executionTime = Date.now() - startTime;
       const errorMessage = lastError?.message || 'Unknown error';
 
-      await this.prisma.cronExecution.update({
-        where: { id: execution.id },
-        data: {
-          completedAt: new Date(),
-          status: ExecutionStatus.FAILED,
-          errorMessage,
-          executionTimeMs: executionTime,
-          attemptNumber: attempt - 1,
-        },
-      });
+      // Calculate nextRunAt for failed job
+      let nextRunAt: Date | null = null;
+      try {
+        const expression = CronExpressionParser.parse(prismaJob.cronExpression);
+        nextRunAt = expression.next().toDate();
+      } catch (error) {
+        this.logger.warn(`Failed to calculate next run time for job ${prismaJob.id}:`, error);
+      }
 
-      // Update job status
-      await this.updateJobNextRun(prismaJob);
-      await this.prisma.cronJob.update({
-        where: { id: prismaJob.id },
-        data: {
-          status: CronJobStatus.FAILED,
-        },
-      });
+      // Use transaction to update execution and job status atomically
+      await this.prisma.$transaction([
+        this.prisma.cronExecution.update({
+          where: { id: execution.id },
+          data: {
+            completedAt: new Date(),
+            status: ExecutionStatus.FAILED,
+            errorMessage,
+            executionTimeMs: executionTime,
+            attemptNumber: attempt - 1,
+          },
+        }),
+        this.prisma.cronJob.update({
+          where: { id: prismaJob.id },
+          data: {
+            status: CronJobStatus.FAILED,
+            ...(nextRunAt && { nextRunAt }),
+          },
+        }),
+      ]);
 
       // Emit WebSocket event
       this.websocketGateway.emitExecutionCompleted(
@@ -259,7 +335,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         executionTimeMs: executionTime,
         attemptNumber: attempt - 1,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.logger.error(`Fatal error executing cron job ${prismaJob.id}:`, error);
 
       // Update job status
@@ -275,13 +352,15 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
         prismaJob.id,
         prismaJob.name,
         ExecutionStatus.FAILED,
-        error.message,
+        errorMessage,
       );
 
       throw error;
     }
   }
 
+  // Deprecated: nextRunAt is now updated in transactions with job status
+  // Kept for backward compatibility if needed elsewhere
   private async updateJobNextRun(prismaJob: PrismaCronJob): Promise<void> {
     try {
       const expression = CronExpressionParser.parse(prismaJob.cronExpression);
@@ -294,6 +373,28 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       this.logger.warn(`Failed to calculate next run time for job ${prismaJob.id}:`, error);
     }
+  }
+
+  private startQueueMetricsLogging(): void {
+    // Log queue statistics every 5 minutes
+    this.queueStatsInterval = setInterval(() => {
+      const size = this.executionQueue.size; // Pending jobs
+      const pending = this.executionQueue.pending; // Active jobs
+
+      if (size > 0 || pending > 0) {
+        this.logger.log(
+          `Execution queue stats: pending=${size}, active=${pending}, concurrency=${this.executionQueue.concurrency}`,
+        );
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+  }
+
+  getQueueStats(): { size: number; pending: number; concurrency: number } {
+    return {
+      size: this.executionQueue.size,
+      pending: this.executionQueue.pending,
+      concurrency: this.executionQueue.concurrency,
+    };
   }
 }
 

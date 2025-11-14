@@ -110,21 +110,54 @@ export class ReschedulingService implements OnModuleInit {
       where: { isActive: true },
     });
 
-    for (const job of activeJobs) {
-      try {
-        const metrics = await this.calculateMetrics(job);
-        const newExpression = await this.evaluateRules(job, metrics);
+    const totalJobs = activeJobs.length;
+    const batchSize = parseInt(
+      this.configService.get<string>('RESCHEDULING_BATCH_SIZE') || '50',
+      10,
+    );
 
-        if (newExpression && newExpression !== job.cronExpression) {
-          await this.applyRescheduling(job, newExpression, 'auto-rescheduling');
-          this.logger.log(
-            `Auto-rescheduled job ${job.name} (${job.id}): ${job.cronExpression} -> ${newExpression}`,
-          );
+    this.logger.log(`Processing ${totalJobs} jobs in batches of ${batchSize}...`);
+
+    // Process jobs in batches
+    for (let i = 0; i < activeJobs.length; i += batchSize) {
+      const batch = activeJobs.slice(i, i + batchSize);
+      const batchNumber = Math.floor(i / batchSize) + 1;
+      const totalBatches = Math.ceil(totalJobs / batchSize);
+
+      this.logger.log(
+        `Processing batch ${batchNumber}/${totalBatches} (${batch.length} jobs)...`,
+      );
+
+      // Process batch in parallel using Promise.all
+      const batchPromises = batch.map(async (job) => {
+        try {
+          const metrics = await this.calculateMetrics(job);
+          const newExpression = await this.evaluateRules(job, metrics);
+
+          if (newExpression && newExpression !== job.cronExpression) {
+            await this.applyRescheduling(job, newExpression, 'auto-rescheduling');
+            this.logger.log(
+              `Auto-rescheduled job ${job.name} (${job.id}): ${job.cronExpression} -> ${newExpression}`,
+            );
+          }
+          return { success: true, jobId: job.id };
+        } catch (error) {
+          this.logger.error(`Failed to evaluate job ${job.id}:`, error);
+          return { success: false, jobId: job.id, error };
         }
-      } catch (error) {
-        this.logger.error(`Failed to evaluate job ${job.id}:`, error);
-      }
+      });
+
+      // Wait for batch to complete
+      const results = await Promise.all(batchPromises);
+      const successCount = results.filter((r) => r.success).length;
+      const failureCount = results.filter((r) => !r.success).length;
+
+      this.logger.log(
+        `Batch ${batchNumber}/${totalBatches} completed: ${successCount} succeeded, ${failureCount} failed`,
+      );
     }
+
+    this.logger.log(`Completed evaluation of ${totalJobs} jobs`);
   }
 
   private async calculateMetrics(job: CronJob): Promise<JobMetrics> {

@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    container_name: cron-manager-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cron_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: cron-manager-app
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/cron_manager?schema=public
+      JWT_SECRET: your-secret-key-change-this-in-production
+      JWT_REFRESH_SECRET: your-refresh-secret-change-this-in-production
+      TOKEN_SALT: your-token-salt-change-this-in-production
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      PORT: 3000
+      CORS_ORIGIN: "*"
+      NODE_ENV: production
+      MAX_CONCURRENT_EXECUTIONS: 10
+      DATABASE_CONNECTION_LIMIT: 20
+      DATABASE_POOL_TIMEOUT: 20
+    depends_on:
+      db:
+        condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && node dist/main.js"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+

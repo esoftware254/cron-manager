@@ -1,16 +1,12 @@
 import { Controller, Get } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 
-@Controller('api')
+@Controller()
 export class AppController {
-  constructor(private configService: ConfigService) {}
-
   @Get()
   root() {
     return {
       message: 'Cron Manager API',
       version: '1.0.0',
-      docs: '/api/docs',
     };
   }
 
