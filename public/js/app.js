@@ -1,7 +1,14 @@
 /* global io */
 
 // Initialize Socket.io connection
-const socket = io('http://localhost:3000/ws');
+// Use current host and protocol (works for localhost and production)
+const socketProtocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+const socketHost = window.location.host;
+const socket = io(`${socketProtocol}//${socketHost}/ws`, {
+  transports: ['polling', 'websocket'],
+  upgrade: true,
+  rememberUpgrade: true,
+});
 
 socket.on('connect', () => {
     console.log('Connected to WebSocket server');

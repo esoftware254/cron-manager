@@ -24,7 +24,15 @@ async function bootstrap() {
         scriptSrc: ["'self'", "'unsafe-inline'", "https://cdn.socket.io"],
         scriptSrcAttr: ["'unsafe-inline'"], // Allow inline event handlers (onclick, etc.)
         imgSrc: ["'self'", "data:", "https:"],
-        connectSrc: ["'self'", "https://cdn.socket.io", "ws:", "wss:"],
+        // Allow Socket.IO connections from same origin (works for both HTTP and HTTPS)
+        connectSrc: [
+          "'self'",
+          "https://cdn.socket.io",
+          "ws:",
+          "wss:",
+          "http://localhost:*",
+          "https://localhost:*",
+        ],
         fontSrc: ["'self'", "data:"],
         objectSrc: ["'none'"],
         mediaSrc: ["'self'"],
